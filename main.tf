@@ -338,3 +338,41 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "workload_vpc_attachment" {
   vpc_id             = module.workload_vpc.vpc_id
   subnet_ids         = [module.workload_vpc.private_subnets[0]]
 }
+
+### ROUTE TABLES ###
+
+# Internet VPC: Route to Workload VPC via TGW
+resource "aws_route" "internet_to_workload" {
+  route_table_id         = module.internet_vpc.public_route_table_ids[0]
+  destination_cidr_block = module.workload_vpc.vpc_cidr_block
+  transit_gateway_id     = aws_ec2_transit_gateway.transit_gateway.id
+
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.internet_vpc_attachment]
+}
+
+# Workload VPC: Route to Internet VPC via TGW
+resource "aws_route" "workload_to_internet" {
+  route_table_id         = module.workload_vpc.private_route_table_ids[0]
+  destination_cidr_block = module.internet_vpc.vpc_cidr_block
+  transit_gateway_id     = aws_ec2_transit_gateway.transit_gateway.id
+
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.workload_vpc_attachment]
+}
+
+# Workload VPC: Default route to Internet via TGW (for outbound)
+resource "aws_route" "workload_to_internet_default" {
+  route_table_id         = module.workload_vpc.private_route_table_ids[0]
+  destination_cidr_block = "0.0.0.0/0"
+  transit_gateway_id     = aws_ec2_transit_gateway.transit_gateway.id
+
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.workload_vpc_attachment]
+}
+
+# Workload intra subnets also need routes
+resource "aws_route" "workload_intra_to_internet" {
+  route_table_id         = module.workload_vpc.intra_route_table_ids[0]
+  destination_cidr_block = "0.0.0.0/0"
+  transit_gateway_id     = aws_ec2_transit_gateway.transit_gateway.id
+
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.workload_vpc_attachment]
+}
