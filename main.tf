@@ -127,6 +127,8 @@ module "workload_vpc" {
   }
 }
 
+## WEB RESOURCES ##
+
 resource "aws_lb" "workload_nlb" {
   name               = "workload-vpc-nlb"
   internal           = true
@@ -199,22 +201,46 @@ resource "aws_lb_listener" "workload_alb_listener" {
   }
 }
 
-### TRANSIT GATEWAY ###
-resource "aws_ec2_transit_gateway" "transit_gateway" {
-  description = "transit gateway for internet and workload VPCs"
+
+# NLB Target Group - targets Workload ALB
+resource "aws_lb_target_group" "nlb_to_alb_tg" {
+  name        = "nlb-to-alb-tg"
+  port        = 80
+  protocol    = "TCP"
+  vpc_id      = module.workload_vpc.vpc_id
+  target_type = "alb"
+
+  # health_check {
+  #   enabled             = true
+  #   healthy_threshold   = 2
+  #   interval            = 30
+  #   port                = "traffic-port"
+  #   protocol            = "HTTP"
+  #   path                = "/"
+  #   timeout             = 6
+  #   unhealthy_threshold = 2
+  # }
 }
 
-resource "aws_ec2_transit_gateway_vpc_attachment" "internet_vpc_attachment" {
-  transit_gateway_id = aws_ec2_transit_gateway.transit_gateway.id
-  vpc_id             = module.internet_vpc.vpc_id
-  subnet_ids         = module.internet_vpc.private_subnets
+# Attach Workload ALB to NLB Target Group
+resource "aws_lb_target_group_attachment" "nlb_to_alb" {
+  target_group_arn = aws_lb_target_group.nlb_to_alb_tg.arn
+  target_id        = aws_lb.workload_alb.arn
+  port             = 80
 }
 
-resource "aws_ec2_transit_gateway_vpc_attachment" "workload_vpc_attachment" {
-  transit_gateway_id = aws_ec2_transit_gateway.transit_gateway.id
-  vpc_id             = module.workload_vpc.vpc_id
-  subnet_ids         = [module.workload_vpc.private_subnets[0]]
+# NLB Listener
+resource "aws_lb_listener" "workload_nlb_listener" {
+  load_balancer_arn = aws_lb.workload_nlb.arn
+  port              = 80
+  protocol          = "TCP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.nlb_to_alb_tg.arn
+  }
 }
+
 
 ### APP RESOURCES ###
 module "ecs" {
@@ -294,4 +320,21 @@ module "ecs" {
     Environment = "Development"
     Project     = "Example"
   }
+}
+
+### TRANSIT GATEWAY ###
+resource "aws_ec2_transit_gateway" "transit_gateway" {
+  description = "transit gateway for internet and workload VPCs"
+}
+
+resource "aws_ec2_transit_gateway_vpc_attachment" "internet_vpc_attachment" {
+  transit_gateway_id = aws_ec2_transit_gateway.transit_gateway.id
+  vpc_id             = module.internet_vpc.vpc_id
+  subnet_ids         = module.internet_vpc.private_subnets
+}
+
+resource "aws_ec2_transit_gateway_vpc_attachment" "workload_vpc_attachment" {
+  transit_gateway_id = aws_ec2_transit_gateway.transit_gateway.id
+  vpc_id             = module.workload_vpc.vpc_id
+  subnet_ids         = [module.workload_vpc.private_subnets[0]]
 }
