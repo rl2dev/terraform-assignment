@@ -1,8 +1,9 @@
 provider "aws" {
   region = "us-east-1"
 }
-
-# Internet VPC
+###############################
+######## INTERNET VPC #########
+###############################
 module "internet_vpc" {
   source  = "terraform-aws-modules/vpc/aws"
   version = "~> 5.0"
@@ -30,11 +31,80 @@ resource "aws_lb" "internet_alb" {
   name               = "internet-vpc-alb"
   internal           = false
   load_balancer_type = "application"
-#   security_groups    = [aws_security_group.allow_tls.id]
+  security_groups    = [aws_security_group.internet_alb_sg.id]
   subnets            = module.internet_vpc.public_subnets
 }
 
-# Workload VPC
+resource "aws_security_group" "internet_alb_sg" {
+  name        = "internet-alb-sg"
+  description = "public ALB security group"
+  vpc_id      = module.internet_vpc.vpc_id
+
+  # allow http traffic from anywhere
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # allow https traffic from anywhere
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "internet-alb-sg"
+  }
+}
+
+
+# Internet ALB Target Group - targets Workload ALB via TGW
+resource "aws_lb_target_group" "internet_alb_tg" {
+  name        = "internet-to-workload-tg"
+  port        = 80
+  protocol    = "HTTP"
+  vpc_id      = module.internet_vpc.vpc_id
+  target_type = "ip"
+
+  # health_check {
+  #   enabled             = true
+  #   healthy_threshold   = 2
+  #   interval            = 30
+  #   matcher             = "200-399"
+  #   path                = "/"
+  #   port                = "traffic-port"
+  #   protocol            = "HTTP"
+  #   timeout             = 5
+  #   unhealthy_threshold = 2
+  # }
+}
+
+# Internet ALB Listener
+resource "aws_lb_listener" "internet_alb_listener" {
+  load_balancer_arn = aws_lb.internet_alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.internet_alb_tg.arn
+  }
+}
+
+###############################
+######## WORKLOAD VPC #########
+###############################
 module "workload_vpc" {
   source  = "terraform-aws-modules/vpc/aws"
   version = "~> 5.0"
@@ -44,7 +114,7 @@ module "workload_vpc" {
 
   azs              = ["us-east-1a", "us-east-1b"]
   private_subnets  = ["10.1.1.0/24", "10.1.2.0/24"] # tgw + web
-  intra_subnets    = ["10.1.3.0/24"] # app
+  intra_subnets    = ["10.1.3.0/24"]                # app
   database_subnets = ["10.1.5.0/24", "10.1.6.0/24"] # db (requires 2 AZs)
 
   enable_nat_gateway = false # Will use TGW to reach internet
@@ -93,7 +163,7 @@ resource "aws_lb" "workload_alb" {
   name               = "workload-vpc-alb"
   internal           = true
   load_balancer_type = "application"
-    security_groups    = [aws_security_group.workload_alb_sg.id]
+  security_groups    = [aws_security_group.workload_alb_sg.id]
   subnets            = [module.workload_vpc.private_subnets[1], module.workload_vpc.intra_subnets[0]]
 }
 
@@ -101,21 +171,21 @@ resource "aws_lb_target_group" "workload_alb_tg" {
   name        = "ecs-task-tg"
   port        = 8080
   protocol    = "HTTP"
-    target_type = "ip"
+  target_type = "ip"
   vpc_id      = module.workload_vpc.vpc_id
 
 
-#   health_check {
-#     enabled             = true
-#     healthy_threshold   = 2
-#     interval            = 30
-#     matcher             = "200"
-#     path                = "/"
-#     port                = "traffic-port"
-#     protocol            = "HTTP"
-#     timeout             = 5
-#     unhealthy_threshold = 2
-#   }
+  #   health_check {
+  #     enabled             = true
+  #     healthy_threshold   = 2
+  #     interval            = 30
+  #     matcher             = "200"
+  #     path                = "/"
+  #     port                = "traffic-port"
+  #     protocol            = "HTTP"
+  #     timeout             = 5
+  #     unhealthy_threshold = 2
+  #   }
 }
 
 resource "aws_lb_listener" "workload_alb_listener" {
@@ -148,7 +218,7 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "workload_vpc_attachment" {
 
 ### APP RESOURCES ###
 module "ecs" {
-  source = "terraform-aws-modules/ecs/aws"
+  source  = "terraform-aws-modules/ecs/aws"
   version = "7.4.0"
 
   cluster_name = "ecs-integrated"
