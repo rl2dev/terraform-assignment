@@ -13,7 +13,9 @@ module "internet_vpc" {
 
   azs             = ["us-east-1a", "us-east-1b"]
   public_subnets  = ["10.0.1.0/24", "10.0.2.0/24"]
-  private_subnets = ["10.0.3.0/24"] # For TGW attachment
+  public_subnet_names = ["gateway-subnet-a", "gateway-subnet-b"]
+  private_subnets = ["10.0.3.0/24", "10.0.4.0/24"]
+  private_subnet_names = ["internet-tgw-subnet", "internet-firewall-subnet"]
 
   enable_nat_gateway = true
   single_nat_gateway = true
@@ -22,7 +24,7 @@ module "internet_vpc" {
   enable_dns_support   = true
 
   tags = {
-    Environment = "dev"
+    Name = "internet-vpc"
   }
 }
 
@@ -113,9 +115,10 @@ module "workload_vpc" {
   cidr = "10.1.0.0/16"
 
   azs              = ["us-east-1a", "us-east-1b"]
-  private_subnets  = ["10.1.1.0/24", "10.1.2.0/24"] # tgw + web
-  intra_subnets    = ["10.1.3.0/24"]                # app
+  private_subnets  = ["10.1.1.0/24", "10.1.2.0/24", "10.1.3.0/24"] # tgw + web
+  private_subnet_names = ["workload-web-subnet-a", "workload-web-subnet-b", "workload-tgw-subnet"]
   database_subnets = ["10.1.5.0/24", "10.1.6.0/24"] # db (requires 2 AZs)
+  database_subnet_names = ["workload-db-subnet-a", "workload-db-subnet-b"]
 
   enable_nat_gateway = false # Will use TGW to reach internet
 
@@ -123,7 +126,7 @@ module "workload_vpc" {
   enable_dns_support   = true
 
   tags = {
-    Environment = "dev"
+    Name = "workload-vpc"
   }
 }
 
