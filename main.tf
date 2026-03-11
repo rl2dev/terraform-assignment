@@ -11,10 +11,10 @@ module "internet_vpc" {
   name = "internet-vpc"
   cidr = "10.0.0.0/16"
 
-  azs             = ["ap-southeast-1a", "ap-southeast-1b"]
-  public_subnets  = ["10.0.1.0/24", "10.0.2.0/24"]
-  public_subnet_names = ["gateway-subnet-a", "gateway-subnet-b"]
-  private_subnets = ["10.0.3.0/24", "10.0.4.0/24"]
+  azs                  = ["ap-southeast-1a", "ap-southeast-1b"]
+  public_subnets       = ["10.0.1.0/24", "10.0.2.0/24"]
+  public_subnet_names  = ["gateway-subnet-a", "gateway-subnet-b"]
+  private_subnets      = ["10.0.3.0/24", "10.0.4.0/24"]
   private_subnet_names = ["internet-tgw-subnet", "internet-firewall-subnet"]
 
   enable_nat_gateway = true
@@ -79,17 +79,14 @@ resource "aws_lb_target_group" "internet_alb_tg" {
   vpc_id      = module.internet_vpc.vpc_id
   target_type = "ip"
 
-  # health_check {
-  #   enabled             = true
-  #   healthy_threshold   = 2
-  #   interval            = 30
-  #   matcher             = "200-399"
-  #   path                = "/"
-  #   port                = "traffic-port"
-  #   protocol            = "HTTP"
-  #   timeout             = 5
-  #   unhealthy_threshold = 2
-  # }
+  health_check {
+    enabled             = true
+    path                = "/"   # echoserver responds to root
+    matcher             = "200" # Looking for a standard success
+    interval            = 30
+    healthy_threshold   = 3
+    unhealthy_threshold = 3
+  }
 }
 
 # Internet ALB Listener
@@ -114,10 +111,10 @@ module "workload_vpc" {
   name = "workload-vpc"
   cidr = "10.1.0.0/16"
 
-  azs              = ["ap-southeast-1a", "ap-southeast-1b"]
-  private_subnets  = ["10.1.1.0/24", "10.1.2.0/24", "10.1.3.0/24"]
-  private_subnet_names = ["workload-web-subnet-a", "workload-web-subnet-b", "workload-tgw-subnet"]
-  database_subnets = ["10.1.5.0/24", "10.1.6.0/24"] # db (requires 2 AZs)
+  azs                   = ["ap-southeast-1a", "ap-southeast-1b"]
+  private_subnets       = ["10.1.1.0/24", "10.1.2.0/24", "10.1.3.0/24"]
+  private_subnet_names  = ["workload-web-subnet-a", "workload-web-subnet-b", "workload-tgw-subnet"]
+  database_subnets      = ["10.1.5.0/24", "10.1.6.0/24"] # db (requires 2 AZs)
   database_subnet_names = ["workload-db-subnet-a", "workload-db-subnet-b"]
 
   enable_nat_gateway = false # Will use TGW to reach internet
@@ -146,16 +143,15 @@ resource "aws_lb_target_group" "nlb_tg" {
   vpc_id      = module.workload_vpc.vpc_id
   target_type = "alb"
 
-  # health_check {
-  #   enabled             = true
-  #   healthy_threshold   = 2
-  #   interval            = 30
-  #   port                = "traffic-port"
-  #   protocol            = "HTTP"
-  #   path                = "/"
-  #   timeout             = 6
-  #   unhealthy_threshold = 2
-  # }
+  health_check {
+    enabled             = true
+    protocol            = "HTTP" # NLB can "reach into" L7 for health checks
+    path                = "/"    # echoserver responds here
+    matcher             = "200-399"
+    interval            = 30
+    healthy_threshold   = 3 # NLB defaults are slightly different
+    unhealthy_threshold = 3
+  }
 }
 
 # NLB Listener
@@ -211,17 +207,20 @@ resource "aws_lb_target_group" "workload_alb_tg" {
   vpc_id      = module.workload_vpc.vpc_id
 
 
-  #   health_check {
-  #     enabled             = true
-  #     healthy_threshold   = 2
-  #     interval            = 30
-  #     matcher             = "200"
-  #     path                = "/"
-  #     port                = "traffic-port"
-  #     protocol            = "HTTP"
-  #     timeout             = 5
-  #     unhealthy_threshold = 2
-  #   }
+  health_check {
+    enabled             = true
+    path                = "/"    # Echoserver returns 200 OK at root
+    port                = "8080" # Explicitly check the app port
+    protocol            = "HTTP"
+    matcher             = "200" # Strict success code
+    interval            = 15    # Faster checks for app-level health
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+  }
+
+  # This helps prevent connection drops during deployments
+  deregistration_delay = 30
 }
 
 resource "aws_lb_listener" "workload_alb_listener" {
