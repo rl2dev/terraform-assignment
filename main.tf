@@ -1,5 +1,5 @@
 provider "aws" {
-  region = "us-east-1"
+  region = "ap-southeast-1"
 }
 ###############################
 ######## INTERNET VPC #########
@@ -11,7 +11,7 @@ module "internet_vpc" {
   name = "internet-vpc"
   cidr = "10.0.0.0/16"
 
-  azs             = ["us-east-1a", "us-east-1b"]
+  azs             = ["ap-southeast-1a", "ap-southeast-1b"]
   public_subnets  = ["10.0.1.0/24", "10.0.2.0/24"]
   public_subnet_names = ["gateway-subnet-a", "gateway-subnet-b"]
   private_subnets = ["10.0.3.0/24", "10.0.4.0/24"]
@@ -22,11 +22,11 @@ module "internet_vpc" {
 
   enable_dns_hostnames = true
   enable_dns_support   = true
-
-  tags = {
-    Name = "internet-vpc"
-  }
 }
+
+## FIREWALL LAYER ##
+
+## GATEWAY LAYER ##
 
 #Application Load Balancer
 resource "aws_lb" "internet_alb" {
@@ -71,7 +71,7 @@ resource "aws_security_group" "internet_alb_sg" {
 }
 
 
-# Internet ALB Target Group - targets Workload ALB via TGW
+# Internet ALB Target Group - targets Workload NLB
 resource "aws_lb_target_group" "internet_alb_tg" {
   name        = "internet-to-workload-tg"
   port        = 80
@@ -114,8 +114,8 @@ module "workload_vpc" {
   name = "workload-vpc"
   cidr = "10.1.0.0/16"
 
-  azs              = ["us-east-1a", "us-east-1b"]
-  private_subnets  = ["10.1.1.0/24", "10.1.2.0/24", "10.1.3.0/24"] # tgw + web
+  azs              = ["ap-southeast-1a", "ap-southeast-1b"]
+  private_subnets  = ["10.1.1.0/24", "10.1.2.0/24", "10.1.3.0/24"]
   private_subnet_names = ["workload-web-subnet-a", "workload-web-subnet-b", "workload-tgw-subnet"]
   database_subnets = ["10.1.5.0/24", "10.1.6.0/24"] # db (requires 2 AZs)
   database_subnet_names = ["workload-db-subnet-a", "workload-db-subnet-b"]
@@ -125,19 +125,58 @@ module "workload_vpc" {
   enable_dns_hostnames = true
   enable_dns_support   = true
 
-  tags = {
-    Name = "workload-vpc"
-  }
 }
 
 ## WEB RESOURCES ##
 
+## NLB
 resource "aws_lb" "workload_nlb" {
   name               = "workload-vpc-nlb"
   internal           = true
   load_balancer_type = "network"
   subnets            = [module.workload_vpc.private_subnets[1]]
 
+}
+
+# NLB Target Group - targets Workload ALB
+resource "aws_lb_target_group" "nlb_tg" {
+  name        = "nlb-tg"
+  port        = 80
+  protocol    = "TCP"
+  vpc_id      = module.workload_vpc.vpc_id
+  target_type = "alb"
+
+  # health_check {
+  #   enabled             = true
+  #   healthy_threshold   = 2
+  #   interval            = 30
+  #   port                = "traffic-port"
+  #   protocol            = "HTTP"
+  #   path                = "/"
+  #   timeout             = 6
+  #   unhealthy_threshold = 2
+  # }
+}
+
+# NLB Listener
+resource "aws_lb_listener" "workload_nlb_listener" {
+  load_balancer_arn = aws_lb.workload_nlb.arn
+  port              = 80
+  protocol          = "TCP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.nlb_tg.arn
+  }
+}
+
+## ALB
+resource "aws_lb" "workload_alb" {
+  name               = "workload-vpc-alb"
+  internal           = true
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.workload_alb_sg.id]
+  subnets            = [module.workload_vpc.private_subnets[0], module.workload_vpc.private_subnets[1]]
 }
 
 resource "aws_security_group" "workload_alb_sg" {
@@ -162,14 +201,6 @@ resource "aws_security_group" "workload_alb_sg" {
   tags = {
     Name = "workload-alb-sg"
   }
-}
-
-resource "aws_lb" "workload_alb" {
-  name               = "workload-vpc-alb"
-  internal           = true
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.workload_alb_sg.id]
-  subnets            = [module.workload_vpc.private_subnets[1], module.workload_vpc.intra_subnets[0]]
 }
 
 resource "aws_lb_target_group" "workload_alb_tg" {
@@ -205,43 +236,11 @@ resource "aws_lb_listener" "workload_alb_listener" {
 }
 
 
-# NLB Target Group - targets Workload ALB
-resource "aws_lb_target_group" "nlb_to_alb_tg" {
-  name        = "nlb-to-alb-tg"
-  port        = 80
-  protocol    = "TCP"
-  vpc_id      = module.workload_vpc.vpc_id
-  target_type = "alb"
-
-  # health_check {
-  #   enabled             = true
-  #   healthy_threshold   = 2
-  #   interval            = 30
-  #   port                = "traffic-port"
-  #   protocol            = "HTTP"
-  #   path                = "/"
-  #   timeout             = 6
-  #   unhealthy_threshold = 2
-  # }
-}
-
 # Attach Workload ALB to NLB Target Group
 resource "aws_lb_target_group_attachment" "nlb_to_alb" {
-  target_group_arn = aws_lb_target_group.nlb_to_alb_tg.arn
+  target_group_arn = aws_lb_target_group.nlb_tg.arn
   target_id        = aws_lb.workload_alb.arn
   port             = 80
-}
-
-# NLB Listener
-resource "aws_lb_listener" "workload_nlb_listener" {
-  load_balancer_arn = aws_lb.workload_nlb.arn
-  port              = 80
-  protocol          = "TCP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.nlb_to_alb_tg.arn
-  }
 }
 
 
@@ -250,7 +249,7 @@ module "ecs" {
   source  = "terraform-aws-modules/ecs/aws"
   version = "7.4.0"
 
-  cluster_name = "ecs-integrated"
+  cluster_name = "ecs-cluster"
 
   cluster_configuration = {
     execute_command_configuration = {
@@ -300,12 +299,13 @@ module "ecs" {
         }
       }
 
-      subnet_ids = module.workload_vpc.intra_subnets
+      subnet_ids = [module.workload_vpc.private_subnets[0], module.workload_vpc.private_subnets[1]]
 
       security_group_ingress_rules = {
         alb_ingress = {
           description                  = "Service port"
           from_port                    = 8080
+          to_port                      = 8080
           ip_protocol                  = "tcp"
           referenced_security_group_id = aws_security_group.workload_alb_sg.id
         }
@@ -320,8 +320,7 @@ module "ecs" {
   }
 
   tags = {
-    Environment = "Development"
-    Project     = "Example"
+    Name = "ecs-cluster"
   }
 }
 
@@ -330,12 +329,14 @@ resource "aws_ec2_transit_gateway" "transit_gateway" {
   description = "transit gateway for internet and workload VPCs"
 }
 
+## Internet VPC Attachment to TGW 
 resource "aws_ec2_transit_gateway_vpc_attachment" "internet_vpc_attachment" {
   transit_gateway_id = aws_ec2_transit_gateway.transit_gateway.id
   vpc_id             = module.internet_vpc.vpc_id
-  subnet_ids         = module.internet_vpc.private_subnets
+  subnet_ids         = [module.internet_vpc.private_subnets[0]]
 }
 
+## Workload VPC Attachment to TGW
 resource "aws_ec2_transit_gateway_vpc_attachment" "workload_vpc_attachment" {
   transit_gateway_id = aws_ec2_transit_gateway.transit_gateway.id
   vpc_id             = module.workload_vpc.vpc_id
@@ -343,6 +344,13 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "workload_vpc_attachment" {
 }
 
 ### ROUTE TABLES ###
+
+# TGW Route Table
+resource "aws_ec2_transit_gateway_route_table" "tgw_route_table" {
+  transit_gateway_id = aws_ec2_transit_gateway.transit_gateway.id
+}
+
+### ROUTES ###
 
 # Internet VPC: Route to Workload VPC via TGW
 resource "aws_route" "internet_to_workload" {
@@ -365,15 +373,6 @@ resource "aws_route" "workload_to_internet" {
 # Workload VPC: Default route to Internet via TGW (for outbound)
 resource "aws_route" "workload_to_internet_default" {
   route_table_id         = module.workload_vpc.private_route_table_ids[0]
-  destination_cidr_block = "0.0.0.0/0"
-  transit_gateway_id     = aws_ec2_transit_gateway.transit_gateway.id
-
-  depends_on = [aws_ec2_transit_gateway_vpc_attachment.workload_vpc_attachment]
-}
-
-# Workload intra subnets also need routes
-resource "aws_route" "workload_intra_to_internet" {
-  route_table_id         = module.workload_vpc.intra_route_table_ids[0]
   destination_cidr_block = "0.0.0.0/0"
   transit_gateway_id     = aws_ec2_transit_gateway.transit_gateway.id
 
