@@ -299,3 +299,17 @@ Confirm when prompted. This removes both VPCs, TGW, all load balancers, ECS clus
 | ECS Fargate | Workload | Runs echoserver on 8080 |
 
 Together, this demonstrates a **multi-VPC, TGW-based path** from the internet to an internal ECS service, with clear separation between gateway (Internet VPC) and workload (Workload VPC) and no direct exposure of the workload VPC to the internet.
+
+## Questions
+1.	Given three (3) possible security flaws with the design and how you can exploit them?
+- The firewall subnet is empty and gateway public ALB is not protected with WAF (Web Application Firewall), leaving it exposed to attacks such as SQL injection and XSS
+2.	Discuss three (3) trade-off for the design
+- Using a central Internet VPC with TGW simplifies management but adds Data Processing Charges for every GB passing through the TGW.	Higher monthly AWS bill compared to putting an IGW directly in the Workload VPC.
+- "Double Load Balancing" design adds extra latency and complexity to the system
+- Placing TGW attachments in it's own subnet gives more granular control but with increased management overhead of Route Tables across multiple subnets
+3.	Given that you have the system running, I want to add a schedule job to fetch the new stories from https://hacker-news.firebaseio.com every day at 5am GMT+8 and store them into the database, give me your best recommendation
+- EventBridge + AWS Lambda, schedule a cron job to fetch and store the news daily at the appointed time
+- It is serverless and cost effective as only the duration of the code run is charged
+- It is the most simple and straightforward option due to serverless and managed service (Eventbridge and Lambda), and also has minimal code and boilerplate required
+4. Other recommendations
+- If there are only 2 VPCs, VPC Peering may be a better option as it is more cost effective and straightfoward than Transit Gateway(TGW); TGW is more suitable for connecting multiple VPCs
