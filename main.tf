@@ -105,25 +105,41 @@ data "aws_network_interfaces" "nlb_enis" {
   depends_on = [aws_lb.workload_nlb]
 }
 
-# 2. Get the Private IPs from those ENIs
-data "aws_network_interface" "nlb_ips" {
-  for_each = toset(data.aws_network_interfaces.nlb_enis.ids)
-  id       = each.value
+locals {
+  # We define static keys ("az1", "az2") so Terraform knows 
+  # how many resources to create before running.
+  subnet_map = {
+    "az1" = module.workload_vpc.private_subnets[0]
+    "az2" = module.workload_vpc.private_subnets[1]
+  }
+}
+# 2. Look up the ENI for each subnet
+data "aws_network_interface" "nlb_eni_per_subnet" {
+  for_each = local.subnet_map
+
+  filter {
+    name   = "description"
+    # IMPORTANT: Ensure 'workload-vpc-nlb' matches your aws_lb.name exactly
+    values = ["ELB net/workload-vpc-nlb/*"] 
+  }
+
+  filter {
+    name   = "subnet-id"
+    values = [each.value]
+  }
 
   depends_on = [aws_lb.workload_nlb]
 }
 
-# 3. Attach the NLB IPs to the Gateway ALB Target Group (cross-VPC IP targets require availability_zone = "all")
+# 3. Attach using the same static keys
 resource "aws_lb_target_group_attachment" "internet_alb_attachment" {
-  for_each = data.aws_network_interface.nlb_ips
+  for_each = data.aws_network_interface.nlb_eni_per_subnet
 
   target_group_arn  = aws_lb_target_group.internet_alb_tg.arn
   target_id         = each.value.private_ip
   port              = 80
   availability_zone = "all"
-  depends_on        = [aws_lb_target_group.internet_alb_tg]
 }
-
 
 # Internet ALB Listener
 resource "aws_lb_listener" "internet_alb_listener" {
@@ -276,86 +292,129 @@ resource "aws_lb_target_group_attachment" "nlb_to_alb" {
   target_group_arn = aws_lb_target_group.nlb_tg.arn
   target_id        = aws_lb.workload_alb.arn
   port             = 80
+
+  depends_on = [aws_lb_listener.workload_alb_listener]
+}
+
+
+# Create CloudWatch Log Group
+resource "aws_cloudwatch_log_group" "ecs" {
+  name              = "/ecs/echoserver"
+  retention_in_days = 14
+}
+
+# IAM Role for ECS Task Execution
+resource "aws_iam_role" "ecs_exec" {
+  name = "ecs-exec-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+    }]
+  })
+}
+
+# Create Policy Attachment to ECS Task Execution Role
+resource "aws_iam_role_policy_attachment" "ecs_exec" {
+  role       = aws_iam_role.ecs_exec.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
 
 ### APP RESOURCES ###
-module "ecs" {
+module "ecs_cluster" {
   source  = "terraform-aws-modules/ecs/aws"
-  version = "7.4.0"
+  version = "~> 5.0" 
 
-  cluster_name = "ecs-cluster"
+  cluster_name = "workload-cluster"
 
-  cluster_configuration = {
-    execute_command_configuration = {
-      logging = "OVERRIDE"
-      log_configuration = {
-        cloud_watch_log_group_name = "/aws/ecs/aws-ec2"
-      }
-    }
-  }
-
-  # Cluster capacity providers
-  cluster_capacity_providers = ["FARGATE", "FARGATE_SPOT"]
-  default_capacity_provider_strategy = {
+  # 1. Cluster Capacity Providers
+  fargate_capacity_providers = {
     FARGATE = {
-      weight = 50
-      base   = 20
-    }
-    FARGATE_SPOT = {
-      weight = 50
+      default_capacity_provider_strategy = {
+        weight = 100
+      }
     }
   }
-  services = {
-    ecsdemo-frontend = {
-      cpu    = 256
-      memory = 512
 
-      # Container definition(s)
+  #2. Services, Task Definitions, and Containers
+  services = {
+    echoserver = {
+      name                   = "echoserver-service"
+      family                 = "echoserver-task"
+      cpu                    = 256
+      memory                 = 512
+      desired_count          = 1
+      network_mode           = "awsvpc"
+      requires_compatibilities = ["FARGATE"]
+
+      task_exec_iam_role_arn    = aws_iam_role.ecs_exec.arn
+
+      # Network configuration
+      subnet_ids         = [module.workload_vpc.private_subnets[3], module.workload_vpc.private_subnets[4]]
+      assign_public_ip   = false
+      security_group_ids = [aws_security_group.ecs_sg.id]
+
+      # Container definition
       container_definitions = {
-        ecs-sample = {
-      essential = true
+        echoserver = {
+          name      = "echoserver"
           image     = "k8s.gcr.io/e2e-test-images/echoserver:2.5"
-      portMappings = [
-        {
-              name          = "ecs-sample"
-          containerPort = 8080
-          protocol      = "tcp"
-        }
-      ]
+          essential = true
+
+          readonly_root_filesystem = false
+
+          port_mappings = [
+            {
+              containerPort = 8080
+              protocol      = "tcp"
+            }
+          ]
+
+          # Log Configuration
+          log_configuration = {
+            logDriver = "awslogs"
+            options = {
+              "awslogs-group"         = "/ecs/echoserver"
+              "awslogs-region"        = "ap-southeast-1"
+              "awslogs-stream-prefix" = "echoserver"
+            }
+          }
         }
       }
 
+      # Load Balancer configuration
       load_balancer = {
         service = {
           target_group_arn = aws_lb_target_group.workload_alb_tg.arn
-          container_name   = "ecs-sample"
+          container_name   = "echoserver"
           container_port   = 8080
-        }
-      }
-
-      subnet_ids = [module.workload_vpc.private_subnets[0], module.workload_vpc.private_subnets[1]]
-
-      security_group_ingress_rules = {
-        alb_ingress = {
-          description                  = "Service port"
-          from_port                    = 8080
-          to_port                      = 8080
-          ip_protocol                  = "tcp"
-          referenced_security_group_id = aws_security_group.workload_alb_sg.id
-        }
-      }
-      security_group_egress_rules = {
-        all = {
-          ip_protocol = "-1"
-          cidr_ipv4   = "0.0.0.0/0"
         }
       }
     }
   }
+}
 
-  tags = {
-    Name = "ecs-cluster"
+# 3. Security Group 
+resource "aws_security_group" "ecs_sg" {
+  name        = "ecs-sg"
+  vpc_id      = module.workload_vpc.vpc_id
+
+  ingress {
+    protocol        = "tcp"
+    from_port       = 8080
+    to_port         = 8080
+    security_groups = [aws_security_group.workload_alb_sg.id]
+  }
+
+  egress {
+    protocol    = "-1"
+    from_port   = 0
+    to_port     = 0
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
