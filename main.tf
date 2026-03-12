@@ -1,5 +1,5 @@
 provider "aws" {
-  region = "ap-southeast-1"
+  region = var.aws_region
 }
 
 ###############################
@@ -9,17 +9,17 @@ module "internet_vpc" {
   source  = "terraform-aws-modules/vpc/aws"
   version = "~> 5.0"
 
-  name = "internet-vpc"
-  cidr = "10.0.0.0/16"
+  name = var.internet_vpc_name
+  cidr = var.internet_vpc_cidr
 
-  azs                  = ["ap-southeast-1a", "ap-southeast-1b"]
-  public_subnets        = ["10.0.1.0/24", "10.0.2.0/24"]
-  public_subnet_names   = ["gateway-subnet-a", "gateway-subnet-b"]
-  private_subnets       = ["10.0.3.0/24", "10.0.4.0/24"]
-  private_subnet_names  = ["internet-tgw-subnet", "internet-firewall-subnet"]
+  azs                  = var.internet_vpc_azs
+  public_subnets        = var.internet_vpc_public_subnets
+  public_subnet_names   = var.internet_vpc_public_subnet_names
+  private_subnets       = var.internet_vpc_private_subnets
+  private_subnet_names  = var.internet_vpc_private_subnet_names
 
-  enable_nat_gateway = true
-  single_nat_gateway = true
+  enable_nat_gateway = var.internet_vpc_enable_nat_gateway
+  single_nat_gateway = var.internet_vpc_single_nat_gateway
 
   enable_dns_hostnames = true
   enable_dns_support   = true
@@ -32,16 +32,16 @@ module "workload_vpc" {
   source  = "terraform-aws-modules/vpc/aws"
   version = "~> 5.0"
 
-  name = "workload-vpc"
-  cidr = "10.1.0.0/16"
+  name = var.workload_vpc_name
+  cidr = var.workload_vpc_cidr
 
-  azs                   = ["ap-southeast-1a", "ap-southeast-1b", "ap-southeast-1c", "ap-southeast-1a", "ap-southeast-1b"]
-  private_subnets       = ["10.1.1.0/24", "10.1.2.0/24", "10.1.3.0/24", "10.1.4.0/24", "10.1.5.0/24"]
-  private_subnet_names  = ["workload-web-subnet-a", "workload-web-subnet-b", "workload-tgw-subnet", "workload-app-subnet-a", "workload-app-subnet-b"]
-  database_subnets      = ["10.1.6.0/24", "10.1.7.0/24"]
-  database_subnet_names = ["workload-db-subnet-a", "workload-db-subnet-b"]
+  azs                   = var.workload_vpc_azs
+  private_subnets       = var.workload_vpc_private_subnets
+  private_subnet_names  = var.workload_vpc_private_subnet_names
+  database_subnets      = var.workload_vpc_database_subnets
+  database_subnet_names = var.workload_vpc_database_subnet_names
 
-  enable_nat_gateway = false
+  enable_nat_gateway = var.workload_vpc_enable_nat_gateway
 
   enable_dns_hostnames = true
   enable_dns_support   = true
@@ -70,7 +70,7 @@ module "web_nlb" {
 
   vpc_id             = module.workload_vpc.vpc_id
   private_subnet_ids = module.workload_vpc.private_subnets
-  nlb_name           = "workload-vpc-nlb"
+  nlb_name           = var.web_nlb_name
 }
 
 ###############################
@@ -106,5 +106,5 @@ module "ecs" {
   app_subnet_ids                  = [module.workload_vpc.private_subnets[3], module.workload_vpc.private_subnets[4]]
   workload_alb_target_group_arn   = module.web_alb.alb_target_group_arn
   workload_alb_security_group_id  = module.web_alb.alb_security_group_id
-  aws_region                      = "ap-southeast-1"
+  aws_region                      = var.aws_region
 }
