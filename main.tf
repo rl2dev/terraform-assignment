@@ -24,9 +24,11 @@ module "internet_vpc" {
   enable_dns_support   = true
 }
 
-## FIREWALL LAYER ##
+## FIREWALL RESOURCES ##
 
-## GATEWAY LAYER ##
+# Already created by VPC module: aws_network_firewall.firewall
+
+## GATEWAY RESOURCE ##
 
 #Application Load Balancer
 resource "aws_lb" "internet_alb" {
@@ -325,6 +327,7 @@ resource "aws_iam_role_policy_attachment" "ecs_exec" {
 
 
 ### APP RESOURCES ###
+
 module "ecs_cluster" {
   source  = "terraform-aws-modules/ecs/aws"
   version = "~> 5.0" 
@@ -472,24 +475,6 @@ resource "aws_ec2_transit_gateway_route" "tgw_to_workload" {
   destination_cidr_block         = module.workload_vpc.vpc_cidr_block
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.workload_vpc_attachment.id
 }
-
-# # Gateway Subnet Route to Internet Gateway
-# resource "aws_route" "gateway_subnet_to_internet_gateway" {
-#   for_each = toset(module.internet_vpc.public_route_table_ids)  
-#   route_table_id         = each.value
-#   destination_cidr_block = "0.0.0.0/0"
-#   gateway_id             = aws_internet_gateway.this.id
-#   depends_on = [aws_ec2_transit_gateway_vpc_attachment.internet_vpc_attachment]
-# }
-
-# # Gateway Subnet Route to Transit Gateway
-# resource "aws_route" "gateway_subnet_to_transit_gateway" {
-#   for_each               = { for i, id in module.internet_vpc.public_route_table_ids : tostring(i) => id }
-#   route_table_id         = each.value
-#   destination_cidr_block = module.workload_vpc.vpc_cidr_block
-#   transit_gateway_id     = aws_ec2_transit_gateway.transit_gateway.id
-#   depends_on             = [aws_ec2_transit_gateway_vpc_attachment.internet_vpc_attachment]
-# }
 
 # Internet VPC: Route to Workload VPC via TGW
 resource "aws_route" "internet_to_workload" {
