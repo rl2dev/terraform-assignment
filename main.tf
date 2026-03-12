@@ -71,7 +71,7 @@ resource "aws_security_group" "internet_alb_sg" {
 }
 
 
-# Internet ALB Target Group - targets Workload NLB
+# Internet ALB Target Group - targets Workload NLB (cross-VPC via TGW)
 resource "aws_lb_target_group" "internet_alb_tg" {
   name        = "internet-to-workload-tg"
   port        = 80
@@ -81,13 +81,49 @@ resource "aws_lb_target_group" "internet_alb_tg" {
 
   health_check {
     enabled             = true
-    path                = "/"   # echoserver responds to root
-    matcher             = "200" # Looking for a standard success
+    protocol            = "HTTP"
+    path                = "/"
+    matcher             = "200-399" 
     interval            = 30
+    timeout             = 10 
     healthy_threshold   = 3
     unhealthy_threshold = 3
   }
 }
+
+# 1. Find the ENIs for the Workload NLB
+data "aws_network_interfaces" "nlb_enis" {
+  filter {
+    name   = "description"
+    values = ["ELB net/workload-vpc-nlb/*"]
+  }
+  filter {
+    name   = "status"
+    values = ["in-use"]
+  }
+
+  depends_on = [aws_lb.workload_nlb]
+}
+
+# 2. Get the Private IPs from those ENIs
+data "aws_network_interface" "nlb_ips" {
+  for_each = toset(data.aws_network_interfaces.nlb_enis.ids)
+  id       = each.value
+
+  depends_on = [aws_lb.workload_nlb]
+}
+
+# 3. Attach the NLB IPs to the Gateway ALB Target Group (cross-VPC IP targets require availability_zone = "all")
+resource "aws_lb_target_group_attachment" "internet_alb_attachment" {
+  for_each = data.aws_network_interface.nlb_ips
+
+  target_group_arn  = aws_lb_target_group.internet_alb_tg.arn
+  target_id         = each.value.private_ip
+  port              = 80
+  availability_zone = "all"
+  depends_on        = [aws_lb_target_group.internet_alb_tg]
+}
+
 
 # Internet ALB Listener
 resource "aws_lb_listener" "internet_alb_listener" {
@@ -111,10 +147,10 @@ module "workload_vpc" {
   name = "workload-vpc"
   cidr = "10.1.0.0/16"
 
-  azs                   = ["ap-southeast-1a", "ap-southeast-1b"]
-  private_subnets       = ["10.1.1.0/24", "10.1.2.0/24", "10.1.3.0/24"]
-  private_subnet_names  = ["workload-web-subnet-a", "workload-web-subnet-b", "workload-tgw-subnet"]
-  database_subnets      = ["10.1.5.0/24", "10.1.6.0/24"] # db (requires 2 AZs)
+  azs                   = ["ap-southeast-1a", "ap-southeast-1b", "ap-southeast-1c", "ap-southeast-1a", "ap-southeast-1b"]
+  private_subnets       = ["10.1.1.0/24", "10.1.2.0/24", "10.1.3.0/24", "10.1.4.0/24", "10.1.5.0/24"]
+  private_subnet_names  = ["workload-web-subnet-a", "workload-web-subnet-b", "workload-tgw-subnet", "workload-app-subnet-a", "workload-app-subnet-b"]
+  database_subnets      = ["10.1.6.0/24", "10.1.7.0/24"] # db (requires 2 AZs)
   database_subnet_names = ["workload-db-subnet-a", "workload-db-subnet-b"]
 
   enable_nat_gateway = false # Will use TGW to reach internet
@@ -131,7 +167,7 @@ resource "aws_lb" "workload_nlb" {
   name               = "workload-vpc-nlb"
   internal           = true
   load_balancer_type = "network"
-  subnets            = [module.workload_vpc.private_subnets[1]]
+  subnets            = [module.workload_vpc.private_subnets[0], module.workload_vpc.private_subnets[1]]
 
 }
 
@@ -278,15 +314,15 @@ module "ecs" {
       # Container definition(s)
       container_definitions = {
         ecs-sample = {
-          essential = true
+      essential = true
           image     = "k8s.gcr.io/e2e-test-images/echoserver:2.5"
-          portMappings = [
-            {
+      portMappings = [
+        {
               name          = "ecs-sample"
-              containerPort = 8080
-              protocol      = "tcp"
-            }
-          ]
+          containerPort = 8080
+          protocol      = "tcp"
+        }
+      ]
         }
       }
 
@@ -349,11 +385,57 @@ resource "aws_ec2_transit_gateway_route_table" "tgw_route_table" {
   transit_gateway_id = aws_ec2_transit_gateway.transit_gateway.id
 }
 
+# Associate VPC attachments with our TGW route table (replace default association)
+resource "aws_ec2_transit_gateway_route_table_association" "internet_vpc" {
+  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.internet_vpc_attachment.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.tgw_route_table.id
+  replace_existing_association   = true
+}
+
+resource "aws_ec2_transit_gateway_route_table_association" "workload_vpc" {
+  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.workload_vpc_attachment.id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.tgw_route_table.id
+  replace_existing_association   = true
+}
+
 ### ROUTES ###
+
+# TGW Route to Internet VPC
+resource "aws_ec2_transit_gateway_route" "tgw_to_internet" {
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.tgw_route_table.id
+  destination_cidr_block         = "0.0.0.0/0"
+  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.internet_vpc_attachment.id
+}
+
+# TGW Route to Workload VPC
+resource "aws_ec2_transit_gateway_route" "tgw_to_workload" {
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.tgw_route_table.id
+  destination_cidr_block         = module.workload_vpc.vpc_cidr_block
+  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.workload_vpc_attachment.id
+}
+
+# # Gateway Subnet Route to Internet Gateway
+# resource "aws_route" "gateway_subnet_to_internet_gateway" {
+#   for_each = toset(module.internet_vpc.public_route_table_ids)  
+#   route_table_id         = each.value
+#   destination_cidr_block = "0.0.0.0/0"
+#   gateway_id             = aws_internet_gateway.this.id
+#   depends_on = [aws_ec2_transit_gateway_vpc_attachment.internet_vpc_attachment]
+# }
+
+# # Gateway Subnet Route to Transit Gateway
+# resource "aws_route" "gateway_subnet_to_transit_gateway" {
+#   for_each               = { for i, id in module.internet_vpc.public_route_table_ids : tostring(i) => id }
+#   route_table_id         = each.value
+#   destination_cidr_block = module.workload_vpc.vpc_cidr_block
+#   transit_gateway_id     = aws_ec2_transit_gateway.transit_gateway.id
+#   depends_on             = [aws_ec2_transit_gateway_vpc_attachment.internet_vpc_attachment]
+# }
 
 # Internet VPC: Route to Workload VPC via TGW
 resource "aws_route" "internet_to_workload" {
-  route_table_id         = module.internet_vpc.public_route_table_ids[0]
+  for_each               = { for i, id in module.internet_vpc.public_route_table_ids : tostring(i) => id }
+  route_table_id         = each.value
   destination_cidr_block = module.workload_vpc.vpc_cidr_block
   transit_gateway_id     = aws_ec2_transit_gateway.transit_gateway.id
 
@@ -362,16 +444,8 @@ resource "aws_route" "internet_to_workload" {
 
 # Workload VPC: Route to Internet VPC via TGW
 resource "aws_route" "workload_to_internet" {
-  route_table_id         = module.workload_vpc.private_route_table_ids[0]
-  destination_cidr_block = module.internet_vpc.vpc_cidr_block
-  transit_gateway_id     = aws_ec2_transit_gateway.transit_gateway.id
-
-  depends_on = [aws_ec2_transit_gateway_vpc_attachment.workload_vpc_attachment]
-}
-
-# Workload VPC: Default route to Internet via TGW (for outbound)
-resource "aws_route" "workload_to_internet_default" {
-  route_table_id         = module.workload_vpc.private_route_table_ids[0]
+  for_each               = { for i, id in module.workload_vpc.private_route_table_ids : tostring(i) => id }
+  route_table_id         = each.value
   destination_cidr_block = "0.0.0.0/0"
   transit_gateway_id     = aws_ec2_transit_gateway.transit_gateway.id
 
