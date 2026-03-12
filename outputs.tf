@@ -1,11 +1,14 @@
 output "internet_alb_dns" {
-  value = aws_lb.internet_alb.dns_name
+  description = "DNS name of the internet-facing ALB"
+  value       = module.gateway_alb.alb_dns_name
 }
 
 output "workload_alb_dns" {
-  value = aws_lb.workload_alb.dns_name
+  description = "DNS name of the internal workload ALB"
+  value       = module.web_alb.alb_dns_name
 }
 
 output "workload_nlb_dns" {
-  value = aws_lb.workload_nlb.dns_name
+  description = "DNS name of the workload NLB"
+  value       = module.web_nlb.nlb_dns_name
 }
