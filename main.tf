@@ -108,3 +108,16 @@ module "ecs" {
   workload_alb_security_group_id  = module.web_alb.alb_security_group_id
   aws_region                      = var.aws_region
 }
+
+###############################
+########## AURORA #############
+###############################
+module "aurora" {
+  source = "./modules/aurora"
+
+  vpc_id                = module.workload_vpc.vpc_id
+  database_subnet_ids   = module.workload_vpc.database_subnets
+  ecs_security_group_id = module.ecs.ecs_security_group_id
+  availability_zones    = var.aurora_availability_zones
+  master_password       = var.aurora_master_password
+}

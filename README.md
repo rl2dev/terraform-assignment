@@ -1,6 +1,6 @@
 # Terraform Assignment — Multi-VPC ECS Architecture
 
-This project provisions a **multi-VPC AWS architecture** with an **Internet VPC** and a **Workload VPC** connected via **Transit Gateway**. Traffic from the internet reaches an **internet-facing ALB**, is routed through the TGW to an internal **Network Load Balancer (NLB)**, then to an internal **Application Load Balancer (ALB)** that fronts **ECS Fargate** tasks running an echoserver container.
+This project provisions a **multi-VPC AWS architecture** with an **Internet VPC** and a **Workload VPC** connected via **Transit Gateway**. Traffic from the internet reaches an **internet-facing ALB**, is routed through the TGW to an internal **Network Load Balancer (NLB)**, then to an internal **Application Load Balancer (ALB)** that fronts **ECS Fargate** tasks running an echoserver container. An **Aurora PostgreSQL Serverless v2** cluster in the Workload VPC's database subnets provides the data layer.
 
 ---
 
@@ -45,13 +45,18 @@ This project provisions a **multi-VPC AWS architecture** with an **Internet VPC*
                     │  │  workload-web   workload-web      workload-app-a/b      │  │
                     │  │  subnet-a/b     subnet-a/b        (private)              │  │
                     │  │                                                          │  │
+                    │  │  ┌─────────────────────────────────────────────────────┐  │  │
+                    │  │  │  Aurora PostgreSQL Serverless v2                    │  │  │
+                    │  │  │  workload-db-subnet-a/b                            │  │  │
+                    │  │  └─────────────────────────────────────────────────────┘  │  │
+                    │  │                                                          │  │
                     │  │  TGW attachment: workload-tgw-subnet                     │  │
                     └──┴──────────────────────────────────────────────────────────┘
 ```
 
 - **Region:** `ap-southeast-1` (Singapore)
 - **Internet VPC:** Public gateways, NAT, and an internet-facing ALB that targets the Workload NLB’s ENI IPs (cross-VPC via TGW).
-- **Workload VPC:** Private subnets only (no NAT). Internal NLB → ALB → ECS Fargate (echoserver on port 8080).
+- **Workload VPC:** Private subnets only (no NAT). Internal NLB → ALB → ECS Fargate (echoserver on port 8080). Aurora PostgreSQL Serverless v2 in dedicated database subnets.
 
 ---
 
@@ -86,7 +91,8 @@ This project provisions a **multi-VPC AWS architecture** with an **Internet VPC*
     ├── web_nlb/         # Internal NLB (targets Workload ALB)
     ├── web_alb/         # Internal ALB (targets ECS), attached to NLB TG
     ├── gateway_alb/     # Internet-facing ALB (targets NLB ENI IPs)
-    └── ecs/             # ECS cluster, Fargate service, echoserver task
+    ├── ecs/             # ECS cluster, Fargate service, echoserver task
+    └── aurora/          # Aurora PostgreSQL Serverless v2 cluster
 ```
 
 ---
@@ -225,6 +231,37 @@ Internal **Application Load Balancer** in the Workload VPC. Receives traffic fro
 
 ---
 
+### 6. `aurora` (`./modules/aurora`)
+
+**Aurora PostgreSQL Serverless v2** cluster in the Workload VPC's database subnets. Only the ECS service security group is allowed ingress on port 5432.
+
+| Responsibility | Details |
+|----------------|--------|
+| **Security group** | Allows inbound PostgreSQL (5432) from the ECS security group only; all outbound. |
+| **DB subnet group** | Uses the workload database subnets (`workload-db-subnet-a/b`). |
+| **RDS cluster** | Aurora PostgreSQL (provisioned engine mode) with Serverless v2 scaling. Storage encrypted at rest. |
+| **Cluster instance** | Single `db.serverless` instance. |
+
+**Inputs**
+
+| Name | Description |
+|------|-------------|
+| `vpc_id` | Workload VPC ID. |
+| `database_subnet_ids` | Database subnet IDs for the DB subnet group. |
+| `ecs_security_group_id` | ECS security group ID (allowed ingress on 5432). |
+| `availability_zones` | Availability zones for the Aurora cluster. |
+| `master_password` | Master password (sensitive — supply via `TF_VAR_aurora_master_password` or `.tfvars`). |
+| `cluster_identifier` | (Optional) Cluster identifier. Default: `aurora-cluster`. |
+| `engine_version` | (Optional) Engine version. Default: `13.6`. |
+| `database_name` | (Optional) Default database name. Default: `test`. |
+| `master_username` | (Optional) Master username. Default: `root`. |
+| `min_capacity` | (Optional) Min serverless ACUs. Default: `0.5`. |
+| `max_capacity` | (Optional) Max serverless ACUs. Default: `1.0`. |
+
+**Outputs:** `cluster_endpoint`, `cluster_reader_endpoint`, `cluster_id`, `cluster_port`, `security_group_id`.
+
+---
+
 ## Usage
 
 1. **Clone and enter the project**
@@ -237,17 +274,22 @@ Internal **Application Load Balancer** in the Workload VPC. Receives traffic fro
    terraform init
    ```
 
-3. **Review the plan**
+3. **Set the Aurora master password** (do not hardcode in source)
+   ```bash
+   export TF_VAR_aurora_master_password="your-secure-password"
+   ```
+
+4. **Review the plan**
    ```bash
    terraform plan
    ```
 
-4. **Apply**
+5. **Apply**
    ```bash
    terraform apply
    ```
 
-5. **Get the public endpoint**  
+6. **Get the public endpoint**  
    After apply, use the `internet_alb_dns` output. Open in a browser or curl:
    ```bash
    terraform output internet_alb_dns
@@ -297,8 +339,9 @@ Confirm when prompted. This removes both VPCs, TGW, all load balancers, ECS clus
 | Web NLB | Workload | Internal TCP 80; forwards to Web ALB |
 | Web ALB | Workload | Internal HTTP 80; forwards to ECS |
 | ECS Fargate | Workload | Runs echoserver on 8080 |
+| Aurora PostgreSQL | Workload | Serverless v2 database in DB subnets |
 
-Together, this demonstrates a **multi-VPC, TGW-based path** from the internet to an internal ECS service, with clear separation between gateway (Internet VPC) and workload (Workload VPC) and no direct exposure of the workload VPC to the internet.
+Together, this demonstrates a **multi-VPC, TGW-based path** from the internet to an internal ECS service with a database backend, with clear separation between gateway (Internet VPC) and workload (Workload VPC) and no direct exposure of the workload VPC to the internet.
 
 ## Questions
 1.	Given three (3) possible security flaws with the design and how you can exploit them?

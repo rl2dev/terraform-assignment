@@ -115,6 +115,18 @@ variable "workload_vpc_enable_nat_gateway" {
   default     = false
 }
 
+variable "aurora_availability_zones" {
+  description = "Availability zones for the Aurora cluster"
+  type        = list(string)
+  default     = ["ap-southeast-1a", "ap-southeast-1b"]
+}
+
+variable "aurora_master_password" {
+  description = "Master password for the Aurora cluster"
+  type        = string
+  sensitive   = true
+}
+
 ###############################
 ########## WEB NLB ############
 ###############################
