@@ -12,9 +12,11 @@ This project provisions a **multi-VPC AWS architecture** with an **Internet VPC*
 - [Project Structure](#project-structure)
 - [Modules](#modules)
 - [Usage](#usage)
+- [Testing](#testing)
 - [Outputs](#outputs)
 - [Customization](#customization)
 - [Cleanup](#cleanup)
+- [Question-Answer](#questions)
 
 ---
 
@@ -299,6 +301,13 @@ Internal **Application Load Balancer** in the Workload VPC. Receives traffic fro
 
 ---
 
+## Testing
+
+To test the connection to the ECS echoserver:  
+```curl -X POST http://<internet_alb_dns> -d "hello world"```
+
+---
+
 ## Outputs
 
 | Output | Description |
@@ -346,6 +355,8 @@ Together, this demonstrates a **multi-VPC, TGW-based path** from the internet to
 ## Questions
 1.	Given three (3) possible security flaws with the design and how you can exploit them?
 - The firewall subnet is empty and gateway public ALB is not protected with WAF (Web Application Firewall), leaving it exposed to attacks such as SQL injection and XSS
+- Lack of snapshots of Aurora poses data loss risk if data is accidentally or maliciously deleted, or targeted in a ransomware attack
+- The workload VPC has unrestricted outbound internet access via the TGW, so this path can be exploited to exfiltrate data, establish a reverse shell or download malicious payloads from the ECS task if the ECS task is ever compromised by other vulnerablilities/exploits.
 2.	Discuss three (3) trade-off for the design
 - Using a central Internet VPC with TGW simplifies management but adds Data Processing Charges for every GB passing through the TGW.	Higher monthly AWS bill compared to putting an IGW directly in the Workload VPC.
 - "Double Load Balancing" design adds extra latency and complexity to the system
@@ -356,3 +367,6 @@ Together, this demonstrates a **multi-VPC, TGW-based path** from the internet to
 - It is the most simple and straightforward option due to serverless and managed service (Eventbridge and Lambda), and also has minimal code and boilerplate required
 4. Other recommendations
 - If there are only 2 VPCs, VPC Peering may be a better option as it is more cost effective and straightfoward than Transit Gateway(TGW); TGW is more suitable for connecting multiple VPCs
+
+## AI Use Disclaimer
+- LLM (Gemini, Claude, Cursor) was used as code assistance for this project, namely in generating documentation, code organisation and in learning about Terraform (explanations, suggesting appropriate resources to use etc.)
