@@ -21,37 +21,37 @@ This project provisions a **multi-VPC AWS architecture** with an **Internet VPC*
 ## Architecture Overview
 
 ```
-                    ┌─────────────────────────────────────────────────────────────┐
+                    ┌──────────────────────────────────────────────────────────────┐
                     │                     INTERNET VPC (10.0.0.0/16)               │
                     │  ┌─────────────┐     ┌─────────────────────────────────────┐ │
   Internet          │  │  Gateway    │     │  Public Subnets (gateway-a/b)       │ │
       │             │  │  ALB        │     │  • NAT GW (single)                  │ │
       ▼             │  │  (public)   │     └─────────────────────────────────────┘ │
-                    │  └──────┬──────┘                    │                        │
-                    │         │                            │                        │
+                    │  └──────┬──────┘                     │                       │
+                    │         │                            │                       │
                     │         │  Target: NLB ENI IPs       │  TGW attachment       │
                     │         │  (cross-VPC via TGW)       │  (internet-tgw-subnet)│
-                    │         ▼                            ▼                        │
+                    │         ▼                            ▼                       │
                     │  ┌─────────────────────────────────────────────────────────┐ │
                     │  │         Transit Gateway (TGW)                           │ │
                     └──┼─────────────────────────────────────────────────────────┼─┘
                        │                                                         │
                     ┌──┼─────────────────────────────────────────────────────────┼─┐
-                    │  │              WORKLOAD VPC (10.1.0.0/16)                 │  │
-                    │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐  │  │
-                    │  │  │  Web NLB    │  │  Web ALB    │  │  ECS Fargate     │  │  │
-                    │  │  │  (internal) │──│  (internal) │──│  echoserver      │  │  │
-                    │  │  └─────────────┘  └─────────────┘  └─────────────────┘  │  │
-                    │  │  workload-web   workload-web      workload-app-a/b      │  │
-                    │  │  subnet-a/b     subnet-a/b        (private)              │  │
-                    │  │                                                          │  │
-                    │  │  ┌─────────────────────────────────────────────────────┐  │  │
-                    │  │  │  Aurora PostgreSQL Serverless v2                    │  │  │
-                    │  │  │  workload-db-subnet-a/b                            │  │  │
-                    │  │  └─────────────────────────────────────────────────────┘  │  │
-                    │  │                                                          │  │
-                    │  │  TGW attachment: workload-tgw-subnet                     │  │
-                    └──┴──────────────────────────────────────────────────────────┘
+                    │  │              WORKLOAD VPC (10.1.0.0/16)                 │ │
+                    │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐  │ │
+                    │  │  │  Web NLB    │  │  Web ALB    │  │  ECS Fargate    │  │ │
+                    │  │  │  (internal) │──│  (internal) │──│  echoserver     │  │ │
+                    │  │  └─────────────┘  └─────────────┘  └─────────────────┘  │ │
+                    │  │  workload-web   workload-web      workload-app-a/b      │ │
+                    │  │  subnet-a/b     subnet-a/b        (private)             │ │
+                    │  │                                                         │ │
+                    │  │  ┌─────────────────────────────────────────────────────┐│ │
+                    │  │  │  Aurora PostgreSQL Serverless v2                    ││ │
+                    │  │  │  workload-db-subnet-a/b                             ││ │
+                    │  │  └─────────────────────────────────────────────────────┘│ │
+                    │  │                                                         │ │
+                    │  │  TGW attachment: workload-tgw-subnet                    │ │
+                    └──┴─────────────────────────────────────────────────────────┴─┘
 ```
 
 - **Region:** `ap-southeast-1` (Singapore)
