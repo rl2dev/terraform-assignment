@@ -27,7 +27,7 @@ variable "cluster_identifier" {
 variable "engine_version" {
   description = "Aurora PostgreSQL engine version"
   type        = string
-  default     = "13.6"
+  default     = "13.9"
 }
 
 variable "database_name" {
